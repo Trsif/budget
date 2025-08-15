@@ -2,6 +2,7 @@ import { useState } from "react";
 import FrequencySelect from "./components/FrequencySelect";
 import type { Frequency } from "./types";
 import CurrencyInput from "./components/CurrencyInput";
+import BudgetBreakdown from "./components/BudgetBreakdown";
 function App() {
   const [payAmount, setPayAmount] = useState<number>(0);
   const [frequency, setFrequency] = useState<Frequency>("weekly");
@@ -38,6 +39,7 @@ function App() {
             </p>
           </div>
         </div>
+        <BudgetBreakdown monthlyIncome={monthlyIncome} />
       </div>
     </div>
   );
