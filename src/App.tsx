@@ -7,8 +7,8 @@ function App() {
   const [payAmount, setPayAmount] = useState<number>(0);
   const [frequency, setFrequency] = useState<Frequency>("weekly");
   const frequencyMultipliers: Record<Frequency, number> = {
-    weekly: 4.33,
-    biweekly: 2.165,
+    weekly: 3.8,
+    biweekly: 2,
     monthly: 1,
   };
   const monthlyIncome = Number(
