@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 
 type Props = {
   label?: string;
@@ -21,6 +21,9 @@ export default function CurrencyInput({
       new Intl.NumberFormat("en-US", { style: "currency", currency: "USD" }),
     []
   );
+  useEffect(() => {
+    setText(value ? String(value) : "");
+  }, [value]);
   const parseCurrency = (s: string) => {
     const cleaned = s.replace(/[^\d.]/g, "");
     const [int = "", frac = ""] = cleaned.split(".");
