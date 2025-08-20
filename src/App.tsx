@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import FrequencySelect from "./components/FrequencySelect";
 import type { Frequency } from "./types";
 import CurrencyInput from "./components/CurrencyInput";
@@ -10,10 +10,37 @@ const frequencyMultipliers: Record<Frequency, number> = {
   monthly: 1,
 };
 
+const STORAGE_KEY = "budget_settings_v1";
 function App() {
   const [payAmount, setPayAmount] = useState<number>(0);
   const [frequency, setFrequency] = useState<Frequency>("weekly");
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<{
+        frequency: Frequency;
+        payAmount: number;
+      }>;
+      if (parsed.frequency) setFrequency(parsed.frequency);
+      if (Number.isFinite(parsed.payAmount ?? NaN))
+        setPayAmount(parsed.payAmount as number);
+    } catch {
+      // ignore corrupted storage
+    }
+  }, []);
 
+  // --- Save settings whenever they change
+  useEffect(() => {
+    try {
+      localStorage.setItem(
+        STORAGE_KEY,
+        JSON.stringify({ frequency, payAmount })
+      );
+    } catch {
+      // ignore quota errors
+    }
+  }, [frequency, payAmount]);
   const monthlyIncome = Number(
     (payAmount * frequencyMultipliers[frequency]).toFixed(2)
   );

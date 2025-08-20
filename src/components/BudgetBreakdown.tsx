@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
 import ExpenseList from "./ExpenseList";
 import type { CategoryKey, Expense } from "../types";
 import { CATEGORY_META } from "../types";
@@ -7,6 +7,7 @@ type Props = { monthlyIncome: number };
 type ExpenseMap = Record<CategoryKey, Expense[]>;
 
 const keys: CategoryKey[] = ["needs", "wants", "savings"];
+const STORAGE_KEY = "budget_expenses_v1";
 const newId = () =>
   Math.random().toString(36).slice(2) + Date.now().toString(36);
 
@@ -16,7 +17,30 @@ export default function BudgetBreakdown({ monthlyIncome }: Props) {
     wants: [],
     savings: [],
   });
+  // --- Load from localStorage once on mount
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(STORAGE_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as Partial<ExpenseMap>;
+      setExpenses((prev) => ({
+        needs: parsed.needs ?? prev.needs,
+        wants: parsed.wants ?? prev.wants,
+        savings: parsed.savings ?? prev.savings,
+      }));
+    } catch {
+      // ignore corrupted storage
+    }
+  }, []);
 
+  // --- Save to localStorage whenever expenses change
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(expenses));
+    } catch {
+      // ignore quota errors
+    }
+  }, [expenses]);
   const allocated = useMemo(
     () =>
       keys.reduce(
@@ -155,7 +179,6 @@ export default function BudgetBreakdown({ monthlyIncome }: Props) {
         })}
       </div>
 
-      {/* Per-category editable expense lists */}
       <div className="grid grid-cols-1 gap-6">
         {keys.map((k) => (
           <ExpenseList
