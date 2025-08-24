@@ -1,18 +1,18 @@
 @import "tailwindcss";
 
 @theme {
-  --color-brand: #86efac; /* light green */
+  --color-brand: #1b7a2e;
 }
 
 @layer components {
   .page {
-    @apply min-h-screen bg-gray-100 p-6;
+    @apply min-h-screen bg-emerald-50 to-teal-500 p-6;
   }
   .container {
     @apply mx-auto max-w-md;
   }
   .card {
-    @apply rounded-2xl bg-white p-8 shadow-lg;
+    @apply /* translucent white background */ h-full w-full rounded-xl border border-white/20 bg-white/10 shadow-md backdrop-blur-md;
   }
   .section {
     @apply space-y-6;
@@ -35,7 +35,7 @@
     @apply text-center text-2xl font-bold text-gray-800;
   }
   .btn {
-    @apply bg-brand inline-flex items-center justify-center rounded-lg px-4 py-2 font-medium text-white hover:opacity-90 active:opacity-80;
+    @apply rounded-md bg-green-500/90 px-4 py-2 font-medium text-white shadow transition hover:bg-green-500;
   }
 
   .row {
