@@ -1,56 +1,90 @@
-import { useMemo, useState, useEffect } from "react";
-import ExpenseList from "./ExpenseList";
+import { useEffect, useMemo, useState } from "react";
+import BudgetSummary from "./BudgetSummary";
 import type { CategoryKey, Expense } from "../types";
 import { CATEGORY_META } from "../types";
 
 type Props = { monthlyIncome: number };
 type ExpenseMap = Record<CategoryKey, Expense[]>;
+type Percents = Record<CategoryKey, number>; // 0..1
 
 const keys: CategoryKey[] = ["needs", "wants", "savings"];
-const STORAGE_KEY = "budget_expenses_v1";
+const STORAGE_EXPENSES = "budget_expenses_v1";
+const STORAGE_PERCENTS = "budget_percents_v1";
+const DEFAULT_PERCENTS: Percents = { needs: 0.5, wants: 0.3, savings: 0.2 };
+
 const newId = () =>
   Math.random().toString(36).slice(2) + Date.now().toString(36);
+const clamp = (n: number, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, n));
+const toInt = (f: number) => Math.round((Number.isFinite(f) ? f : 0) * 100);
+const toFrac = (p: number) => (Number.isFinite(p) ? p / 100 : 0);
 
 export default function BudgetBreakdown({ monthlyIncome }: Props) {
+  // --- State
   const [expenses, setExpenses] = useState<ExpenseMap>({
     needs: [],
     wants: [],
     savings: [],
   });
-  // --- Load from localStorage once on mount
+  const [percents, setPercents] = useState<Percents>(DEFAULT_PERCENTS);
+
+  // --- Load once
   useEffect(() => {
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw) as Partial<ExpenseMap>;
-      setExpenses((prev) => ({
-        needs: parsed.needs ?? prev.needs,
-        wants: parsed.wants ?? prev.wants,
-        savings: parsed.savings ?? prev.savings,
-      }));
+      const rawE = localStorage.getItem(STORAGE_EXPENSES);
+      if (rawE) {
+        const parsed = JSON.parse(rawE) as Partial<ExpenseMap>;
+        setExpenses((prev) => ({
+          needs: parsed.needs ?? prev.needs,
+          wants: parsed.wants ?? prev.wants,
+          savings: parsed.savings ?? prev.savings,
+        }));
+      }
     } catch {
-      // ignore corrupted storage
+      console.error();
+    }
+    try {
+      const rawP = localStorage.getItem(STORAGE_PERCENTS);
+      if (rawP) {
+        const p = JSON.parse(rawP) as Partial<Percents>;
+        setPercents((prev) => ({
+          needs: clamp01(p.needs ?? prev.needs),
+          wants: clamp01(p.wants ?? prev.wants),
+          savings: clamp01(p.savings ?? prev.savings),
+        }));
+      }
+    } catch {
+      console.error();
     }
   }, []);
 
-  // --- Save to localStorage whenever expenses change
+  // --- Persist
   useEffect(() => {
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(expenses));
+      localStorage.setItem(STORAGE_EXPENSES, JSON.stringify(expenses));
     } catch {
-      // ignore quota errors
+      console.error();
     }
   }, [expenses]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(STORAGE_PERCENTS, JSON.stringify(percents));
+    } catch {
+      console.error();
+    }
+  }, [percents]);
+
+  // --- Derived values
   const allocated = useMemo(
     () =>
       keys.reduce(
         (acc, k) => {
-          acc[k] = monthlyIncome * CATEGORY_META[k].percent;
+          acc[k] = monthlyIncome * (percents[k] ?? 0);
           return acc;
         },
         {} as Record<CategoryKey, number>
       ),
-    [monthlyIncome]
+    [monthlyIncome, percents]
   );
 
   const totals = useMemo(
@@ -68,12 +102,74 @@ export default function BudgetBreakdown({ monthlyIncome }: Props) {
     [expenses]
   );
 
+  const labels: Record<CategoryKey, string> = {
+    needs: `${CATEGORY_META.needs.label}`,
+    wants: `${CATEGORY_META.wants.label}`,
+    savings: `${CATEGORY_META.savings.label}`,
+  };
+
   const fmt = (n: number) =>
     new Intl.NumberFormat("en-US", {
       style: "currency",
       currency: "USD",
-    }).format(Math.max(0, Number.isFinite(n) ? n : 0));
+    }).format(Math.max(Number.isFinite(n) ? n : 0, 0));
 
+  // --- Slider handler: lock total to 100%, redistribute delta across other two proportionally
+  const handleSlide = (k: CategoryKey, nextInt: number) => {
+    nextInt = clamp(nextInt, 0, 100);
+
+    const currentInt: Record<CategoryKey, number> = {
+      needs: toInt(percents.needs),
+      wants: toInt(percents.wants),
+      savings: toInt(percents.savings),
+    };
+
+    const others = keys.filter((x) => x !== k) as CategoryKey[];
+    const delta = nextInt - currentInt[k]; // if positive, must subtract from others; if negative, add to others
+    const oSum = others.reduce((s, x) => s + currentInt[x], 0);
+
+    // Start from current
+    let next = { ...currentInt, [k]: nextInt };
+
+    if (oSum <= 0 && delta > 0) {
+      // Others are zero; cap k to keep sum 100
+      next[k] = clamp(100 - oSum);
+    } else {
+      // Proportional redistribute across others
+      const provisional = { ...next };
+      others.forEach((x) => {
+        const weight = oSum > 0 ? currentInt[x] / oSum : 1 / others.length;
+        const adj = Math.round(weight * -delta); // move opposite of delta
+        provisional[x] = clamp(currentInt[x] + adj, 0, 100);
+      });
+      // Fix rounding drift so exact 100
+      const sumAfter =
+        provisional[k] + others.reduce((s, x) => s + provisional[x], 0);
+      const fix = 100 - sumAfter;
+      if (fix !== 0) {
+        const pick =
+          fix > 0
+            ? others.reduce((a, b) =>
+                provisional[a] <= provisional[b] ? b : a
+              )
+            : others.reduce((a, b) =>
+                provisional[a] >= provisional[b] ? a : b
+              );
+        provisional[pick] = clamp(provisional[pick] + fix, 0, 100);
+      }
+      next = provisional;
+    }
+
+    setPercents({
+      needs: toFrac(next.needs),
+      wants: toFrac(next.wants),
+      savings: toFrac(next.savings),
+    });
+  };
+  const resetPercents = () => {
+    setPercents({ needs: 0.5, wants: 0.3, savings: 0.2 });
+  };
+  // --- Mutators for expenses
   const onAdd = (k: CategoryKey) =>
     setExpenses((prev) => ({
       ...prev,
@@ -100,103 +196,34 @@ export default function BudgetBreakdown({ monthlyIncome }: Props) {
 
   return (
     <div className="card section">
-      <h2 className="text-lg font-semibold">50/30/20 Breakdown</h2>
-
-      <div className="grid grid-cols-1 gap-6 sm:grid-cols-3">
-        {keys.map((k) => {
-          const alloc = allocated[k];
-          const spent = totals[k];
-          const remaining = alloc - spent;
-          const overBudget = remaining < 0;
-          const pct =
-            alloc > 0 ? Math.min(100, Math.max(0, (spent / alloc) * 100)) : 0;
-
-          return (
-            <div
-              key={`summary-${k}`}
-              className={`stat rounded-lg border-2 p-4 ${
-                overBudget ? "border-red-500" : "border-transparent"
-              }`}
-            >
-              <div className="font-medium text-gray-600">
-                {CATEGORY_META[k].label} •{" "}
-                {Math.round(CATEGORY_META[k].percent * 100)}%
-              </div>
-
-              <div className="mt-1 text-sm text-gray-600">
-                Allocated: {fmt(alloc)}
-              </div>
-              <div className="text-sm text-gray-600">Spent: {fmt(spent)}</div>
-
-              {/* Progress bar */}
-              <div className="mt-2 h-2 w-full overflow-hidden rounded-full bg-gray-200">
-                <div
-                  className={`h-full ${overBudget ? "bg-red-500" : "bg-brand"}`}
-                  style={{ width: `${pct}%` }}
-                  aria-valuemin={0}
-                  aria-valuemax={100}
-                  aria-valuenow={Math.round(pct)}
-                  role="progressbar"
-                />
-              </div>
-
-              <div
-                className={`mt-2 text-xl font-bold ${overBudget ? "text-red-600" : ""}`}
-              >
-                Remaining: {fmt(remaining)}
-              </div>
-
-              {/* Over-budget warning */}
-              {overBudget && (
-                <div
-                  className="mt-2 inline-flex items-center gap-2 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-red-700"
-                  role="alert"
-                  aria-live="polite"
-                >
-                  <svg
-                    className="h-4 w-4"
-                    viewBox="0 0 20 20"
-                    fill="currentColor"
-                    aria-hidden="true"
-                  >
-                    {/*  SVG path  */}
-                    <path
-                      fillRule="evenodd"
-                      d="M8.257 3.099c.765-1.36 2.721-1.36 3.486 0l6.518 11.6c.73 1.3-.207 2.9-1.743 2.9H3.482c-1.536 0-2.473-1.6-1.743-2.9l6.518-11.6zM11 14a1 1 0 10-2 0 1 1 0 002 0zm-1-2a1 1 0 01-1-1V8a1 1 0 112 0v3a1 1 0 01-1 1z"
-                      clipRule="evenodd"
-                    />
-                  </svg>
-                  <span className="text-sm font-medium">
-                    Over budget by{" "}
-                    <span className="font-bold">
-                      {fmt(Math.abs(remaining))}
-                    </span>
-                  </span>
-                </div>
-              )}
-            </div>
-          );
-        })}
+      <h2 className="text-lg font-semibold">Budget Breakdown</h2>
+      <div className="mb-4 flex justify-end">
+        <button className="btn" onClick={resetPercents}>
+          Reset to 50/30/20
+        </button>
       </div>
-
-      <div className="grid grid-cols-1 gap-6">
-        {keys.map((k) => (
-          <ExpenseList
-            key={k}
-            category={k}
-            items={expenses[k]}
-            onAdd={onAdd}
-            onRemove={onRemove}
-            onUpdateName={onUpdateName}
-            onUpdateAmount={onUpdateAmount}
-            headerRight={
-              <span className="text-sm text-gray-600">
-                Spent {fmt(totals[k])} / Alloc {fmt(allocated[k])}
-              </span>
-            }
-          />
-        ))}
-      </div>
+      {/* Compact summary cards with inline sliders (no separate allocation card) */}
+      <BudgetSummary
+        keys={keys}
+        labels={labels}
+        allocated={allocated}
+        totals={totals}
+        percents={percents}
+        onSlide={handleSlide}
+        fmt={fmt}
+        // NEW:
+        items={expenses}
+        onAdd={onAdd}
+        onRemove={onRemove}
+        onUpdateName={onUpdateName}
+        onUpdateAmount={onUpdateAmount}
+      />
     </div>
   );
+}
+
+function clamp01(n: unknown): number {
+  const x = typeof n === "number" ? n : NaN;
+  if (!Number.isFinite(x)) return 0;
+  return Math.max(0, Math.min(1, x));
 }
