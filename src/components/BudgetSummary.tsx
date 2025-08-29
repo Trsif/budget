@@ -16,6 +16,8 @@ type Props = {
   onRemove: (k: CategoryKey, id: string) => void;
   onUpdateName: (k: CategoryKey, id: string, name: string) => void;
   onUpdateAmount: (k: CategoryKey, id: string, amount: number) => void;
+  locks: Record<CategoryKey, boolean>;
+  onToggleLock: (k: CategoryKey) => void;
 };
 
 const toInt = (f: number) => Math.round((Number.isFinite(f) ? f : 0) * 100);
@@ -33,6 +35,8 @@ export default function BudgetSummary({
   onRemove,
   onUpdateName,
   onUpdateAmount,
+  locks,
+  onToggleLock,
 }: Props) {
   const [editing, setEditing] = useState<CategoryKey | null>(null);
   const [temp, setTemp] = useState<number>(0);
@@ -56,6 +60,14 @@ export default function BudgetSummary({
             <div className="flex items-center justify-between gap-3">
               <div className="font-medium text-gray-700">{labels[k]}</div>
               <div className="flex min-w-[140px] items-center gap-2">
+                <button
+                  type="button"
+                  className={`rounded p-1 ${locks[k] ? "text-green-600" : "text-gray-400"} hover:text-green-700`}
+                  onClick={() => onToggleLock(k)}
+                  title={locks[k] ? "Unlock" : "Lock"}
+                >
+                  {locks[k] ? "🔒" : "🔓"}
+                </button>
                 <input
                   className="accent-brand w-24"
                   type="range"

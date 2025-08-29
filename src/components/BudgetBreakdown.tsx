@@ -5,7 +5,7 @@ import { CATEGORY_META } from "../types";
 
 type Props = { monthlyIncome: number };
 type ExpenseMap = Record<CategoryKey, Expense[]>;
-type Percents = Record<CategoryKey, number>; // 0..1
+type Percents = Record<CategoryKey, number>;
 
 const keys: CategoryKey[] = ["needs", "wants", "savings"];
 const STORAGE_EXPENSES = "budget_expenses_v1";
@@ -14,9 +14,6 @@ const DEFAULT_PERCENTS: Percents = { needs: 0.5, wants: 0.3, savings: 0.2 };
 
 const newId = () =>
   Math.random().toString(36).slice(2) + Date.now().toString(36);
-const clamp = (n: number, lo = 0, hi = 100) => Math.max(lo, Math.min(hi, n));
-const toInt = (f: number) => Math.round((Number.isFinite(f) ? f : 0) * 100);
-const toFrac = (p: number) => (Number.isFinite(p) ? p / 100 : 0);
 
 export default function BudgetBreakdown({ monthlyIncome }: Props) {
   // --- State
@@ -26,6 +23,11 @@ export default function BudgetBreakdown({ monthlyIncome }: Props) {
     savings: [],
   });
   const [percents, setPercents] = useState<Percents>(DEFAULT_PERCENTS);
+  const [locks, setLocks] = useState<Record<CategoryKey, boolean>>({
+    needs: false,
+    wants: false,
+    savings: false,
+  });
 
   // --- Load once
   useEffect(() => {
@@ -115,55 +117,97 @@ export default function BudgetBreakdown({ monthlyIncome }: Props) {
     }).format(Math.max(Number.isFinite(n) ? n : 0, 0));
 
   // --- Slider handler: lock total to 100%, redistribute delta across other two proportionally
-  const handleSlide = (k: CategoryKey, nextInt: number) => {
-    nextInt = clamp(nextInt, 0, 100);
+  const handleSlide = (k: CategoryKey, nextIntRaw: number) => {
+    if (locks[k]) return; // cannot edit a locked category
 
+    const clamp = (n: number, lo = 0, hi = 100) =>
+      Math.max(lo, Math.min(hi, n));
+    const toInt = (f: number) => Math.round((Number.isFinite(f) ? f : 0) * 100);
+    const toFrac = (p: number) => (Number.isFinite(p) ? p / 100 : 0);
+
+    // current integer percentages
     const currentInt: Record<CategoryKey, number> = {
       needs: toInt(percents.needs),
       wants: toInt(percents.wants),
       savings: toInt(percents.savings),
     };
 
-    const others = keys.filter((x) => x !== k) as CategoryKey[];
-    const delta = nextInt - currentInt[k]; // if positive, must subtract from others; if negative, add to others
-    const oSum = others.reduce((s, x) => s + currentInt[x], 0);
+    const othersAll = (["needs", "wants", "savings"] as CategoryKey[]).filter(
+      (x) => x !== k
+    );
+    const othersLocked = othersAll.filter((x) => locks[x]);
+    const othersUnlocked = othersAll.filter((x) => !locks[x]);
 
-    // Start from current
-    let next = { ...currentInt, [k]: nextInt };
+    // If no other categories are available to rebalance, k cannot move.
+    if (othersUnlocked.length === 0) {
+      // keep total at 100%: k must equal (100 - sum(others))
+      const fixedK = clamp(
+        100 - othersAll.reduce((s, x) => s + currentInt[x], 0)
+      );
+      setPercents({ ...percents, [k]: toFrac(fixedK) });
+      return;
+    }
 
-    if (oSum <= 0 && delta > 0) {
-      // Others are zero; cap k to keep sum 100
-      next[k] = clamp(100 - oSum);
-    } else {
-      // Proportional redistribute across others
-      const provisional = { ...next };
-      others.forEach((x) => {
-        const weight = oSum > 0 ? currentInt[x] / oSum : 1 / others.length;
-        const adj = Math.round(weight * -delta); // move opposite of delta
+    // Desired new value for k
+    let nextK = clamp(nextIntRaw);
+    const delta = nextK - currentInt[k]; // >0 means we need to subtract from others; <0 means add to others
+
+    const sumUnlocked = othersUnlocked.reduce((s, x) => s + currentInt[x], 0);
+    const decCapacity = sumUnlocked; // how much we can take away (down to 0)
+    const incCapacity = othersUnlocked.reduce(
+      (s, x) => s + (100 - currentInt[x]),
+      0
+    ); // how much we can add (up to 100 each)
+
+    // Cap nextK so we never exceed what unlocked others can compensate
+    if (delta > 0 && delta > decCapacity) {
+      nextK = currentInt[k] + decCapacity;
+    } else if (delta < 0 && -delta > incCapacity) {
+      nextK = currentInt[k] - incCapacity;
+    }
+
+    // Recompute delta after cap
+    const cappedDelta = nextK - currentInt[k];
+
+    // Proportional redistribution across unlocked others
+    const provisional: Record<CategoryKey, number> = {
+      ...currentInt,
+      [k]: nextK,
+    };
+
+    if (cappedDelta !== 0) {
+      const base = sumUnlocked || 1; // avoid div/0
+      othersUnlocked.forEach((x) => {
+        const weight = currentInt[x] / base; // proportional by current size
+        const adj = Math.round(weight * -cappedDelta); // move opposite of k
         provisional[x] = clamp(currentInt[x] + adj, 0, 100);
       });
-      // Fix rounding drift so exact 100
+
+      // Fix rounding to make total EXACTLY 100
       const sumAfter =
-        provisional[k] + others.reduce((s, x) => s + provisional[x], 0);
+        provisional[k] +
+        othersUnlocked.reduce((s, x) => s + provisional[x], 0) +
+        othersLocked.reduce((s, x) => s + currentInt[x], 0);
+
       const fix = 100 - sumAfter;
       if (fix !== 0) {
+        // pick the unlocked other with most room in the direction of fix
         const pick =
           fix > 0
-            ? others.reduce((a, b) =>
-                provisional[a] <= provisional[b] ? b : a
+            ? othersUnlocked.reduce((a, b) =>
+                (provisional[a] ?? 0) <= (provisional[b] ?? 0) ? b : a
               )
-            : others.reduce((a, b) =>
-                provisional[a] >= provisional[b] ? a : b
+            : othersUnlocked.reduce((a, b) =>
+                (provisional[a] ?? 0) >= (provisional[b] ?? 0) ? a : b
               );
-        provisional[pick] = clamp(provisional[pick] + fix, 0, 100);
+        provisional[pick] = clamp((provisional[pick] ?? 0) + fix, 0, 100);
       }
-      next = provisional;
     }
 
     setPercents({
-      needs: toFrac(next.needs),
-      wants: toFrac(next.wants),
-      savings: toFrac(next.savings),
+      needs: toFrac(provisional.needs),
+      wants: toFrac(provisional.wants),
+      savings: toFrac(provisional.savings),
     });
   };
   const resetPercents = () => {
@@ -217,6 +261,8 @@ export default function BudgetBreakdown({ monthlyIncome }: Props) {
         onRemove={onRemove}
         onUpdateName={onUpdateName}
         onUpdateAmount={onUpdateAmount}
+        locks={locks}
+        onToggleLock={(k) => setLocks((prev) => ({ ...prev, [k]: !prev[k] }))}
       />
     </div>
   );
